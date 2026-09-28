@@ -34,6 +34,36 @@ const contentTypes = {
 
 const server = http.createServer((request, response) => {
   const requestedPath = decodeURIComponent(request.url.split("?")[0]);
+
+  // Keep browser requests same-origin while forwarding API traffic to the gateway.
+  if (requestedPath === "/auth/login" || requestedPath.startsWith("/api/")) {
+    const proxyRequest = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: 5000,
+        path: request.url,
+        method: request.method,
+        headers: {
+          ...request.headers,
+          host: "127.0.0.1:5000",
+        },
+      },
+      (proxyResponse) => {
+        response.writeHead(proxyResponse.statusCode || 502, proxyResponse.headers);
+        proxyResponse.pipe(response);
+      },
+    );
+
+    proxyRequest.on("error", () => {
+      if (!response.headersSent) {
+        response.writeHead(502, { "Content-Type": "application/json" });
+      }
+      response.end(JSON.stringify({ message: "API gateway unavailable" }));
+    });
+
+    request.pipe(proxyRequest);
+    return;
+  }
   const relativePath = requestedPath === "/" ? "/index.html" : requestedPath;
   const filePath = path.normalize(path.join(publicDir, relativePath));
 

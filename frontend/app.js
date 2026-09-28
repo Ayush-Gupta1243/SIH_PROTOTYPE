@@ -1,4 +1,5 @@
-const API_URL = "http://localhost:5000";
+// Use the same origin so the app works in previews and deployments.
+const API_URL = "";
 
 
 // ================================
@@ -126,7 +127,7 @@ async function getHousing() {
     try {
 
         const data = await apiRequest(
-            `${API_URL}/api/housing/${citizenId}`
+            `/api/housing/${citizenId}`
         );
 
         showResult(data);
@@ -150,7 +151,7 @@ async function getIncome() {
     try {
 
         const data = await apiRequest(
-            `${API_URL}/api/income/${citizenId}`
+            `/api/income/${citizenId}`
         );
 
         showResult(data);
@@ -174,7 +175,7 @@ async function getLand() {
     try {
 
         const data = await apiRequest(
-            `${API_URL}/api/land/${citizenId}`
+            `/api/land/${citizenId}`
         );
 
         showResult(data);
@@ -198,7 +199,7 @@ async function checkEligibility() {
     try {
 
         const data = await apiRequest(
-            `${API_URL}/api/housing/eligibility/${citizenId}`
+            `/api/housing/eligibility/${citizenId}`
         );
 
         showResult(data);

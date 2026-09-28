@@ -24,6 +24,7 @@ const {
 
 const cors = require("cors");
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || "govconnect-development-secret";
 app.use(cors());
 app.use(helmet());
 app.use(express.json());
@@ -58,7 +59,7 @@ app.post("/auth/login", (req, res) => {
             citizenId,
             role
         },
-        process.env.JWT_SECRET || "govconnect-development-secret",
+        "govconnect-development-secret",
         {
             expiresIn: "1h"
         }
