@@ -1,488 +1,307 @@
-const express = require("express");
-const axios = require("axios");
-const jwt = require("jsonwebtoken");
-require("dotenv").config();
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
 
-const helmet = require("helmet");
-const auditLogger = require("./middleware/audit");
-const {
-    validateCitizenId
-} = require("./middleware/validation");
-const checkCitizenOwnership = require("./middleware/ownership");
-const authenticate = require("./middleware/auth");
-const allowRoles = require("./middleware/rbac");
-const rateLimit = require("express-rate-limit");
-const {
-    submitHousingApplication
-} = require("./services/applicationService");
-const {
-    getApplicationById,
-    getApplicationsByCitizen,
-    getApplicationsByOfficerRole,
-    updateApplicationDecision
-} = require("./services/applicationStore");
+// ===============================
+// CONFIGURATION
+// ===============================
 
-const cors = require("cors");
-const app = express();
-const JWT_SECRET = process.env.JWT_SECRET || "govconnect-development-secret";
-app.use(cors());
-app.use(helmet());
-app.use(express.json());
+const port = Number(process.env.PORT || 3000);
 
-app.use(auditLogger);
+const JWT_SECRET =
+  process.env.JWT_SECRET || "govconnect-development-secret";
 
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: {
-        message: "Too many requests, please try again later"
-    }
-});
+// ===============================
+// BACKEND SERVICES
+// ===============================
 
-app.use("/api", apiLimiter);
-// ================================
-// Demo Login
-// ================================
+const services = [
+  {
+    name: "housing",
+    file: "housing-service/server.js",
+    port: "5001",
+  },
+  {
+    name: "income",
+    file: "income-service/server.js",
+    port: "5002",
+  },
+  {
+    name: "land",
+    file: "land-service/server.js",
+    port: "5003",
+  },
+  {
+    name: "gateway",
+    file: "gateway/server.js",
+    port: "5000",
+  },
+];
 
-app.post("/auth/login", (req, res) => {
+const children = [];
 
-    const { citizenId, role } = req.body;
+// ===============================
+// START ALL SERVICES
+// ===============================
 
-    if (!citizenId || !role) {
-        return res.status(400).json({
-            message: "citizenId and role are required"
-        });
-    }
+for (const service of services) {
+  console.log(
+    `Starting ${service.name} service on port ${service.port}...`
+  );
 
-    const token = jwt.sign(
+  const child = spawn(
+    process.execPath,
+    [path.join(__dirname, service.file)],
     {
-        citizenId,
-        role
-    },
-    JWT_SECRET,
-    {
-        expiresIn: "1h"
-    }
-);
+      env: {
+        ...process.env,
 
-    res.json({
-        message: "Login successful",
-        token
+        // Port for each service
+        PORT: service.port,
+
+        // Same JWT secret everywhere
+        JWT_SECRET,
+      },
+
+      // Show service logs in same terminal
+      stdio: "inherit",
+    }
+  );
+
+  child.on("error", (error) => {
+    console.error(
+      `Unable to start ${service.name} service:`,
+      error.message
+    );
+  });
+
+  child.on("exit", (code, signal) => {
+    if (code !== 0 && signal !== "SIGTERM") {
+      console.error(
+        `${service.name} service stopped.`,
+        `code=${code}, signal=${signal || "none"}`
+      );
+    }
+  });
+
+  children.push(child);
+}
+
+// ===============================
+// GRACEFUL SHUTDOWN
+// ===============================
+
+const shutdown = () => {
+  console.log("\nStopping all services...");
+
+  for (const child of children) {
+    if (!child.killed) {
+      child.kill("SIGTERM");
+    }
+  }
+
+  process.exit(0);
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+
+// ===============================
+// FRONTEND STATIC SERVER
+// ===============================
+
+const publicDir = path.join(__dirname, "frontend");
+
+const contentTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+// ===============================
+// HTTP SERVER
+// ===============================
+
+const server = http.createServer((request, response) => {
+  try {
+    const requestedPath = decodeURIComponent(
+      request.url.split("?")[0]
+    );
+
+    // =========================================
+    // API PROXY
+    // =========================================
+
+    if (
+      requestedPath === "/auth/login" ||
+      requestedPath.startsWith("/api/")
+    ) {
+      const proxyRequest = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: 5000,
+
+          path: request.url,
+
+          method: request.method,
+
+          headers: {
+            ...request.headers,
+
+            // Make sure gateway receives correct host
+            host: "127.0.0.1:5000",
+          },
+        },
+
+        (proxyResponse) => {
+          response.writeHead(
+            proxyResponse.statusCode || 502,
+            proxyResponse.headers
+          );
+
+          proxyResponse.pipe(response);
+        }
+      );
+
+      proxyRequest.on("error", (error) => {
+        console.error(
+          "API gateway proxy error:",
+          error.message
+        );
+
+        if (!response.headersSent) {
+          response.writeHead(502, {
+            "Content-Type": "application/json",
+          });
+        }
+
+        response.end(
+          JSON.stringify({
+            message: "API gateway unavailable",
+          })
+        );
+      });
+
+      request.pipe(proxyRequest);
+
+      return;
+    }
+
+    // =========================================
+    // FRONTEND FILE
+    // =========================================
+
+    const relativePath =
+      requestedPath === "/"
+        ? "/index.html"
+        : requestedPath;
+
+    const filePath = path.normalize(
+      path.join(publicDir, relativePath)
+    );
+
+    // =========================================
+    // SECURITY CHECK
+    // Prevent ../ path traversal
+    // =========================================
+
+    if (
+      !filePath.startsWith(
+        `${publicDir}${path.sep}`
+      )
+    ) {
+      response.writeHead(400, {
+        "Content-Type": "text/plain; charset=utf-8",
+      });
+
+      response.end("Bad request");
+
+      return;
+    }
+
+    // =========================================
+    // READ FRONTEND FILE
+    // =========================================
+
+    fs.readFile(filePath, (error, file) => {
+      if (error) {
+        console.error(
+          "Frontend file error:",
+          error.message
+        );
+
+        response.writeHead(
+          error.code === "ENOENT" ? 404 : 500,
+          {
+            "Content-Type":
+              "text/plain; charset=utf-8",
+          }
+        );
+
+        response.end(
+          error.code === "ENOENT"
+            ? "Not found"
+            : "Internal server error"
+        );
+
+        return;
+      }
+
+      const extension =
+        path.extname(filePath).toLowerCase();
+
+      response.writeHead(200, {
+        "Content-Type":
+          contentTypes[extension] ||
+          "application/octet-stream",
+
+        "Cache-Control": "no-cache",
+      });
+
+      response.end(file);
     });
+  } catch (error) {
+    console.error("Server error:", error);
+
+    if (!response.headersSent) {
+      response.writeHead(500, {
+        "Content-Type": "application/json",
+      });
+    }
+
+    response.end(
+      JSON.stringify({
+        message: "Internal server error",
+      })
+    );
+  }
 });
 
-// ======================================================================================
-app.post(
-    "/api/housing/apply",
-    authenticate,
-    allowRoles("citizen"),
-    async (req, res) => {
+// ===============================
+// START FRONTEND SERVER
+// ===============================
 
-        try {
-
-            const {
-                citizenId,
-                name,
-                dateOfBirth,
-                mobile,
-                address
-            } = req.body;
-
-            // Citizen can only submit for themselves
-            if (req.user.citizenId !== citizenId) {
-                return res.status(403).json({
-                    message: "You can only apply for yourself"
-                });
-            }
-
-            // Basic required-field validation
-            if (
-                !citizenId ||
-                !name ||
-                !dateOfBirth ||
-                !mobile ||
-                !address
-            ) {
-                return res.status(400).json({
-                    message: "All required fields must be provided"
-                });
-            }
-
-            const result =
-                await submitHousingApplication({
-                    citizenId,
-                    name,
-                    dateOfBirth,
-                    mobile,
-                    address
-                });
-
-            res.status(201).json({
-                message: "Housing application submitted",
-                ...result
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Housing application error:",
-                error.message
-            );
-
-            res.status(502).json({
-                message: "Unable to submit housing application"
-            });
-        }
-    }
+server.listen(
+  port,
+  "0.0.0.0",
+  () => {
+    console.log("");
+    console.log("======================================");
+    console.log("       GOVCONNECT STARTED");
+    console.log("======================================");
+    console.log(`Frontend: http://localhost:${port}`);
+    console.log("Gateway:  http://localhost:5000");
+    console.log("Housing:  http://localhost:5001");
+    console.log("Income:   http://localhost:5002");
+    console.log("Land:     http://localhost:5003");
+    console.log("======================================");
+    console.log("");
+  }
 );
-
-//================================================================================
-app.get(
-    "/api/applications/:applicationId",
-    authenticate,
-    async (req, res) => {
-
-        const application =
-            getApplicationById(
-                req.params.applicationId
-            );
-
-        if (!application) {
-            return res.status(404).json({
-                message: "Application not found"
-            });
-        }
-
-        // Citizen can only see their own application
-        if (
-            req.user.role === "citizen" &&
-            application.citizenId !== req.user.citizenId
-        ) {
-            return res.status(403).json({
-                message: "Access denied"
-            });
-        }
-
-        res.json(application);
-    }
-);
-//====================================================================================
-app.get(
-    "/api/applications/citizen/:citizenId",
-    authenticate,
-    async (req, res) => {
-
-        if (
-            req.user.role === "citizen" &&
-            req.user.citizenId !== req.params.citizenId
-        ) {
-            return res.status(403).json({
-                message: "Access denied"
-            });
-        }
-
-        const applications =
-            getApplicationsByCitizen(
-                req.params.citizenId
-            );
-
-        res.json({
-            applications
-        });
-    }
-);
-//=============================================================
-app.get(
-    "/api/officer/applications",
-    authenticate,
-    allowRoles(
-        "housing_officer",
-        "income_officer",
-        "land_officer",
-        "admin"
-    ),
-    async (req, res) => {
-
-        try {
-
-            const applications =
-                getApplicationsByOfficerRole(
-                    req.user.role
-                );
-
-            res.json({
-                applications
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Officer application fetch error:",
-                error.message
-            );
-
-            res.status(500).json({
-                message: "Unable to fetch applications"
-            });
-        }
-    }
-);
-
-//============================================================================
-app.patch(
-    "/api/officer/applications/:applicationId/decision",
-    authenticate,
-    allowRoles("housing_officer", "admin"),
-    async (req, res) => {
-
-        try {
-
-            const { decision, reason } = req.body;
-
-            if (
-                decision !== "APPROVED" &&
-                decision !== "REJECTED"
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Decision must be APPROVED or REJECTED"
-                });
-            }
-
-            const application =
-                getApplicationById(
-                    req.params.applicationId
-                );
-
-            if (!application) {
-                return res.status(404).json({
-                    message: "Application not found"
-                });
-            }
-
-            if (
-                application.status !== "UNDER_REVIEW"
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Application has already been decided"
-                });
-            }
-
-            const updatedApplication =
-                updateApplicationDecision(
-                    req.params.applicationId,
-                    {
-                        status: decision,
-                        by: req.user.citizenId,
-                        role: req.user.role,
-                        reason
-                    }
-                );
-
-            res.json({
-                message:
-                    `Application ${decision.toLowerCase()} successfully`,
-                application: updatedApplication
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Application decision error:",
-                error.message
-            );
-
-            res.status(500).json({
-                message:
-                    "Unable to update application decision"
-            });
-        }
-    }
-);
-// ================================
-// Gateway Health Check
-// ================================
-
-app.get("/health", (req, res) => {
-    res.json({
-        service: "GovConnect API Gateway",
-        status: "running"
-    });
-});
-
-// ================================
-// Housing API
-// ================================
-app.get(
-    "/api/housing/:citizenId",
-    authenticate,
-    allowRoles("citizen", "housing_officer", "admin"),
-    validateCitizenId,
-    checkCitizenOwnership,
-    async (req, res) => {
-
-        try {
-
-            const response = await axios.get(
-                `http://localhost:5001/api/housing/${req.params.citizenId}`
-            );
-
-            const housing = response.data;
-
-res.json({
-    citizenId: housing.citizenId,
-    applicationId: housing.applicationId,
-    status: housing.status,
-    houseType: housing.houseType
-});
-
-        } catch (error) {
-
-            console.error("Housing service error:", error.message);
-
-            res.status(502).json({
-                message: "Housing service unavailable"
-            });
-        }
-    }
-);
-// ================================
-// Income API
-// ================================
-app.get(
-    "/api/income/:citizenId",
-    authenticate,
-    allowRoles("citizen", "income_officer", "admin"),
-    validateCitizenId,
-    checkCitizenOwnership,
-    async (req, res) => {
-
-        try {
-
-            const response = await axios.get(
-                `http://localhost:5002/api/income/${req.params.citizenId}`
-            );
-
-            const income = response.data;
-
-res.json({
-    citizenId: income.citizenId,
-    annualIncome: income.annualIncome,
-    category: income.category
-});
-
-        } catch (error) {
-
-            console.error("Income service error:", error.message);
-
-            res.status(502).json({
-                message: "Income service unavailable"
-            });
-        }
-    }
-);
-
-// ================================
-// Land API
-// ================================
-
-app.get(
-    "/api/land/:citizenId",
-    authenticate,
-    allowRoles("citizen", "land_officer", "admin"),
-    validateCitizenId,
-    checkCitizenOwnership,
-    async (req, res) => {
-
-
-        try {
-
-            const response = await axios.get(
-                `http://localhost:5003/api/land/${req.params.citizenId}`
-            );
-
-            const land = response.data;
-
-res.json({
-    citizenId: land.citizenId,
-    ownsLand: land.ownsLand,
-    landArea: land.landArea
-});
-
-        } catch (error) {
-
-            console.error("Land service error:", error.message);
-
-            res.status(502).json({
-                message: "Land service unavailable"
-            });
-        }
-    }
-);
-// ================================
-// Housing Eligibility
-// ================================
-
-app.get(
-    "/api/housing/eligibility/:citizenId",
-    authenticate,
-    allowRoles("citizen", "housing_officer", "admin"),
-    validateCitizenId,
-    checkCitizenOwnership,
-    async (req, res) => {
-        try {
-
-            const citizenId = req.params.citizenId;
-
-            const [incomeResponse, landResponse] =
-                await Promise.all([
-
-                    axios.get(
-                        `http://localhost:5002/api/income/${citizenId}`
-                    ),
-
-                    axios.get(
-                        `http://localhost:5003/api/land/${citizenId}`
-                    )
-
-                ]);
-
-            const income = incomeResponse.data;
-            const land = landResponse.data;
-
-            const eligible =
-                income.annualIncome <= 300000 &&
-                land.ownsLand === false;
-
-            res.json({
-                citizenId,
-                eligible,
-                reason: eligible
-                    ? "Eligibility criteria satisfied"
-                    : "Eligibility criteria not satisfied"
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Eligibility service error:",
-                error.message
-            );
-
-            res.status(502).json({
-                message: "Unable to verify eligibility"
-            });
-        }
-    }
-);
-
-// ================================
-// Start Gateway
-// ================================
-
-const PORT = 5000;
-
-app.listen(PORT, () => {
-    console.log(`API Gateway running on port ${PORT}`);
-});
