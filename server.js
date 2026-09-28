@@ -1,8 +1,29 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 const port = Number(process.env.PORT || 3000);
+const gateway = spawn(process.execPath, [path.join(__dirname, "gateway", "server.js")], {
+  env: {
+    ...process.env,
+    PORT: "5000",
+    JWT_SECRET: process.env.JWT_SECRET || "govconnect-development-secret",
+  },
+  stdio: "inherit",
+});
+
+gateway.on("error", (error) => {
+  console.error("Unable to start API gateway:", error.message);
+});
+
+const shutdown = () => {
+  gateway.kill("SIGTERM");
+  process.exit(0);
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 const publicDir = path.join(__dirname, "frontend");
 const contentTypes = {
   ".html": "text/html; charset=utf-8",

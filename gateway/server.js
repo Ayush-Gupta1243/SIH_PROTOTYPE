@@ -58,7 +58,7 @@ app.post("/auth/login", (req, res) => {
             citizenId,
             role
         },
-        process.env.JWT_SECRET,
+        process.env.JWT_SECRET || "govconnect-development-secret",
         {
             expiresIn: "1h"
         }
