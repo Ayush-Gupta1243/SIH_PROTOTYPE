@@ -55,15 +55,15 @@ app.post("/auth/login", (req, res) => {
     }
 
     const token = jwt.sign(
-        {
-            citizenId,
-            role
-        },
-        "govconnect-development-secret",
-        {
-            expiresIn: "1h"
-        }
-    );
+    {
+        citizenId,
+        role
+    },
+    JWT_SECRET,
+    {
+        expiresIn: "1h"
+    }
+);
 
     res.json({
         message: "Login successful",
