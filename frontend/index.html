@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>GovConnect</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>GovConnect</h1>
+        <p class="subtitle">
+            One platform for integrated government services
+        </p>
+
+        <!-- LOGIN -->
+        <section id="loginSection">
+
+            <h2>Citizen Login</h2>
+
+            <input
+                type="text"
+                id="loginCitizenId"
+                placeholder="Citizen ID (e.g. CIT001)"
+            >
+
+            <select id="loginRole">
+                <option value="citizen">Citizen</option>
+                <option value="housing_officer">
+                    Housing Officer
+                </option>
+            </select>
+
+            <button onclick="login()">
+                Login
+            </button>
+
+        </section>
+
+
+        <!-- CITIZEN DASHBOARD -->
+        <section id="dashboardSection" style="display: none;">
+
+            <div class="dashboard-header">
+
+                <div>
+                    <h2>Citizen Dashboard</h2>
+
+                    <p>
+                        Citizen ID:
+                        <strong id="displayCitizenId"></strong>
+                    </p>
+                </div>
+
+                <button onclick="logout()">
+                    Logout
+                </button>
+
+            </div>
+
+
+            <!-- PROFILE -->
+            <div class="card">
+
+                <h3>Citizen Profile</h3>
+
+                <input
+                    type="text"
+                    id="name"
+                    placeholder="Full Name"
+                >
+
+                <input
+                    type="date"
+                    id="dateOfBirth"
+                >
+
+                <input
+                    type="text"
+                    id="mobile"
+                    placeholder="Mobile Number"
+                >
+
+                <textarea
+                    id="address"
+                    placeholder="Address"
+                ></textarea>
+
+            </div>
+
+
+            <!-- HOUSING APPLICATION -->
+            <div class="card">
+
+                <h3>Housing Scheme</h3>
+
+                <p>
+                    Apply for housing without repeatedly
+                    submitting the same information to
+                    different departments.
+                </p>
+
+                <button onclick="applyForHousing()">
+                    Apply for Housing
+                </button>
+
+            </div>
+
+
+            <!-- APPLICATION STATUS -->
+            <div class="card">
+
+                <h3>My Applications</h3>
+
+                <button onclick="loadApplications()">
+                    Refresh Application Status
+                </button>
+
+                <div id="applications">
+                    No applications loaded.
+                </div>
+
+            </div>
+
+
+            <pre id="result"></pre>
+
+        </section>
+
+    </div>
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>
